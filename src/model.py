@@ -6,6 +6,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from src.data import PAD_token
+
 
 def scaled_attention(q, k, v, mask=None):
     dk = q.size(-1)
@@ -53,12 +55,10 @@ class MultiHeadAttention(nn.Module):
         qkv = qkv.reshape(batch_size, seq_len, self.heads, 3 * self.head_dim)
         qkv = qkv.permute(0, 2, 1, 3).contiguous()
         q, k, v = qkv.chunk(3, dim=-1)
-        scaled_attention_output = scaled_attention(q, k, v, mask)
-        scaled_attention_output = scaled_attention_output.permute(0, 2, 1, 3).contiguous()
-        scaled_attention_output = scaled_attention_output.reshape(batch_size, seq_len, self.d_model)
-        scaled_attention_output = self.linear(scaled_attention_output)
-        outputs = self.dropout(scaled_attention_output)
-        return outputs
+        out = scaled_attention(q, k, v, mask)
+        out = out.permute(0, 2, 1, 3).contiguous()
+        out = out.reshape(batch_size, seq_len, self.d_model)
+        return self.dropout(self.linear(out))
 
 
 class Encoder_feedforward(nn.Module):
@@ -70,11 +70,7 @@ class Encoder_feedforward(nn.Module):
         self.linear2 = nn.Linear(d_ff, d_model)
 
     def forward(self, x):
-        x = self.linear1(x)
-        x = self.activation(x)
-        x = self.dropout(x)
-        x = self.linear2(x)
-        return x
+        return self.linear2(self.dropout(self.activation(self.linear1(x))))
 
 
 class EncoderLayer(nn.Module):
@@ -89,13 +85,9 @@ class EncoderLayer(nn.Module):
 
     def forward(self, x, mask=None):
         residual = x
-        x = self.attention(x, mask)
-        x = self.dropout1(x)
-        x = self.norm1(x + residual)
+        x = self.norm1(self.dropout1(self.attention(x, mask)) + residual)
         residual = x
-        x = self.feedforward(x)
-        x = self.dropout2(x)
-        x = self.norm2(x + residual)
+        x = self.norm2(self.dropout2(self.feedforward(x)) + residual)
         return x
 
 
@@ -103,10 +95,7 @@ class Encoder(nn.Module):
     def __init__(self, num_layers, d_model, num_heads, d_feedforward, dropout=0.1):
         super(Encoder, self).__init__()
         self.layers = nn.ModuleList(
-            [
-                EncoderLayer(d_model, num_heads, d_feedforward, dropout)
-                for _ in range(num_layers)
-            ]
+            [EncoderLayer(d_model, num_heads, d_feedforward, dropout) for _ in range(num_layers)]
         )
 
     def forward(self, x, mask=None):
@@ -124,15 +113,11 @@ class DecoderFeedForward(nn.Module):
         self.linear2 = nn.Linear(ffn_layer, d_model)
 
     def forward(self, x):
-        x = self.linear1(x)
-        x = self.relu(x)
-        x = self.dropout(x)
-        x = self.linear2(x)
-        return x
+        return self.linear2(self.dropout(self.relu(self.linear1(x))))
 
 
 class CrossHeadAttention(nn.Module):
-    def __init__(self, d_model: int, heads: int, dropout: float = 0.1):
+    def __init__(self, d_model, heads, dropout=0.1):
         super().__init__()
         assert d_model % heads == 0
         self.d_model = d_model
@@ -148,17 +133,12 @@ class CrossHeadAttention(nn.Module):
         _, src_len, _ = y.shape
         q = self.q_layer(x)
         kv = self.kv_layer(y)
-        q = q.reshape(batch_size, tgt_len, self.heads, self.head_dim)
-        kv = kv.reshape(batch_size, src_len, self.heads, 2 * self.head_dim)
-        q = q.permute(0, 2, 1, 3).contiguous()
-        kv = kv.permute(0, 2, 1, 3).contiguous()
+        q = q.reshape(batch_size, tgt_len, self.heads, self.head_dim).permute(0, 2, 1, 3).contiguous()
+        kv = kv.reshape(batch_size, src_len, self.heads, 2 * self.head_dim).permute(0, 2, 1, 3).contiguous()
         k, v = kv.chunk(2, dim=-1)
-        scaled_attentions = scaled_attention(q, k, v, mask=mask)
-        scaled_attentions = scaled_attentions.permute(0, 2, 1, 3).contiguous()
-        scaled_attentions = scaled_attentions.reshape(batch_size, tgt_len, self.d_model)
-        outputs = self.linear(scaled_attentions)
-        outputs = self.dropout(outputs)
-        return outputs
+        out = scaled_attention(q, k, v, mask=mask)
+        out = out.permute(0, 2, 1, 3).contiguous().reshape(batch_size, tgt_len, self.d_model)
+        return self.dropout(self.linear(out))
 
 
 class DecodeLayer(nn.Module):
@@ -176,17 +156,11 @@ class DecodeLayer(nn.Module):
 
     def forward(self, x, y, decoder_mask=None, encoder_mask=None):
         _y = y
-        y = self.self_attn(y, mask=decoder_mask)
-        y = self.dropout1(y)
-        y = self.layernorm1(y + _y)
+        y = self.layernorm1(self.dropout1(self.self_attn(y, mask=decoder_mask)) + _y)
         _y = y
-        y = self.encoder_decoder_crs_attn(y, x, mask=encoder_mask)
-        y = self.dropout2(y)
-        y = self.layernorm2(y + _y)
+        y = self.layernorm2(self.dropout2(self.encoder_decoder_crs_attn(y, x, mask=encoder_mask)) + _y)
         _y = y
-        y = self.ffn(y)
-        y = self.dropout3(y)
-        y = self.layernorm3(y + _y)
+        y = self.layernorm3(self.dropout3(self.ffn(y)) + _y)
         return y
 
 
@@ -194,13 +168,50 @@ class Decoder(nn.Module):
     def __init__(self, num_layers, d_model, num_heads, d_feedforward, dropout=0.1):
         super(Decoder, self).__init__()
         self.layers = nn.ModuleList(
-            [
-                DecodeLayer(d_model, d_feedforward, num_heads, dropout=0.1)
-                for _ in range(num_layers)
-            ]
+            [DecodeLayer(d_model, d_feedforward, num_heads, dropout=0.1) for _ in range(num_layers)]
         )
 
     def forward(self, x, y, tgt_mask=None, src_mask=None):
         for layer in self.layers:
             y = layer(x, y, tgt_mask, src_mask)
         return y
+
+
+class TranslateModel(nn.Module):
+    pad_idx = PAD_token
+
+    def __init__(self, src_vocab_size, tgt_vocab_size, d_model, num_layers, num_heads, dff, dropout=0.1, max_seq_len=65):
+        super().__init__()
+        self.d_model = d_model
+        self.max_seq_len = max_seq_len
+        self.src_embedding = nn.Embedding(src_vocab_size, d_model, padding_idx=PAD_token)
+        self.tgt_embedding = nn.Embedding(tgt_vocab_size, d_model, padding_idx=PAD_token)
+        self.position_embedd = Positional_embedding(d_model, self.max_seq_len)
+        self.encoder = Encoder(num_layers, d_model, num_heads, dff, dropout)
+        self.decoder = Decoder(num_layers, d_model, num_heads, dff, dropout)
+        self.final_linear = nn.Linear(d_model, tgt_vocab_size)
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
+
+    def forward(self, src, tgt):
+        src_mask = self.create_src_mask(src)
+        tgt_mask = self.create_tgt_mask(tgt)
+        src_emb = self.src_embedding(src) * math.sqrt(self.d_model)
+        tgt_emb = self.tgt_embedding(tgt) * math.sqrt(self.d_model)
+        src_emb = src_emb + self.position_embedd(src.size(1))
+        tgt_emb = tgt_emb + self.position_embedd(tgt.size(1))
+        enc_output = self.encoder(src_emb, src_mask)
+        dec_output = self.decoder(enc_output, tgt_emb, tgt_mask, src_mask)
+        return self.final_linear(dec_output)
+
+    def create_src_mask(self, src):
+        return (src != PAD_token).unsqueeze(1).unsqueeze(2)
+
+    def create_tgt_mask(self, tgt):
+        batch_size, tgt_len = tgt.shape
+        device = tgt.device
+        causal = torch.triu(torch.ones(tgt_len, tgt_len, device=device), diagonal=1) == 0
+        padding = tgt != PAD_token
+        mask = causal.unsqueeze(0) & padding.unsqueeze(1)
+        return mask.unsqueeze(1)
