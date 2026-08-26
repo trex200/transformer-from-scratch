@@ -1,43 +1,63 @@
 # Transformer from Scratch
 
-From-scratch implementation of the Transformer architecture from **[Attention Is All You Need](https://arxiv.org/abs/1706.03762)** (Vaswani et al., 2017).
+From-scratch implementation of the Transformer from **[Attention Is All You Need](https://arxiv.org/abs/1706.03762)** (Vaswani et al., 2017).
 
-Learning project: build the blocks by hand, then train English → French on a sentence-pair CSV.
+English → French on a sentence-pair CSV. Blocks written by hand — no `nn.Transformer`.
 
-> Status: **data pipeline is in.** Model + training loop + output screenshots next.
+> Status: **v1 landed.** Data pipeline, model, 10-epoch train (avg loss 2.83 → 0.49), greedy decode.
 
-## Why this repo exists
-
-I wanted to stop treating `nn.Transformer` as a black box and actually build scaled dot-product attention, multi-head attention, and the encoder-decoder stack myself.
-
-## What's in so far
-
-CSV → clean text → word vocabs → SOS/EOS/PAD/UNK ids → batched tensors.
+## What's in here
 
 | Step | Where |
 |---|---|
 | Normalize + vocabs + Dataset | [`src/data.py`](src/data.py) |
-| Runnable walkthrough | [`notebooks/01_prepare_enfr_data.py`](notebooks/01_prepare_enfr_data.py) |
-| Dataset notes | [`data/README.md`](data/README.md) |
-| Numbers from the notebook | [`results/data_prep_notes.md`](results/data_prep_notes.md) |
+| Attention, PE, encoder, decoder, TranslateModel | [`src/model.py`](src/model.py) |
+| Train loop | [`src/train.py`](src/train.py) |
+| Greedy decode | [`src/translate.py`](src/translate.py) |
+| Data notes | [`data/README.md`](data/README.md) |
+| 10-epoch loss | [`results/training_notes.md`](results/training_notes.md) |
+| Sample output | [`results/sample_translations.md`](results/sample_translations.md) |
 
-### Data handling
+## Data
 
-- Load `eng_-french.csv` (175621 rows).
-- `unicodeToAscii` / `normalizeString` from the **PyTorch seq2seq translation tutorial**.
-- Word-level vocabs from the notebook run: **en 14301**, **fr 25726**.
-- Encoder ids = English tokens (UNK if missing).
-- Decoder ids = `SOS + French tokens + EOS`.
-- Pad / truncate to `MAX_LENGTH = 64`, batch size `32`.
+`eng_-french.csv`, 175621 pairs. Vocab after normalize: **en 14301**, **fr 25726**. CSV is not committed (too big). See `data/README.md`.
 
-Full CSV is not committed. See `data/README.md`.
+`unicodeToAscii` / `normalizeString` follow the [PyTorch seq2seq tutorial](https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html).
 
-## Credits
+Encoder `inpLang`: PAD=0, UNK=1. Decoder `Lang`: PAD=0, SOS=1, EOS=2, UNK=3. `MAX_LENGTH=64`, batch=32.
 
-- Vaswani et al., 2017. *Attention Is All You Need*.
-- Text cleanup: [PyTorch seq2seq tutorial](https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html)
-- Sentence pairs: Tatoeba / manythings.org Anki, commonly packaged as Kaggle `eng_-french.csv`
+## Model
+
+| | |
+|---|---|
+| d_model | 256 |
+| layers | 4 enc + 4 dec |
+| heads | 8 |
+| d_ff | 1024 |
+| dropout | 0.1 |
+| PE | sinusoidal buffer, max_len 64 |
+
+Post-norm residual blocks. GELU FFN. Scaled dot-product attention with pad / causal masks.
+
+## Train
+
+AdamW `3e-4`, `CrossEntropyLoss(ignore_index=PAD)`, teacher forcing (`tgt[:, :-1]` → `tgt[:, 1:]`).
+
+| epoch | avg loss |
+|---|---|
+| 1 | 2.83 |
+| 5 | 0.77 |
+| 10 | 0.49 |
+
+~1m10s / epoch at ~77 it/s on CUDA. Checkpoints stayed local (`model_epoch_*.pt`).
+
+## Sample (greedy)
+
+```
+EN: sometimes i feel like killing me and not live anymore
+FR: parfois j'ai l'impression de me tuer et de ne plus vivre .
+```
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT
