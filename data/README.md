@@ -1,14 +1,30 @@
 # Data
 
-The training CSV is **not** in this repo (too big for Git).
+Exact file used in the notebook: **`eng_-french.csv`**
 
-## File used
+| | |
+|---|---|
+| Rows | 175621 + header |
+| Columns | `English words/sentences`, `French words/sentences` |
+| First pairs | `Hi.` / `Salut!`, `Run!` / `Cours !`, `Run!` / `Courez !` |
+| Size | ~12 MB |
 
-- **Name:** `eng_-french.csv`
-- **Shape:** `175621` rows × `2` columns
-- **Columns:** `English words/sentences`, `French words/sentences`
+## Source (Kaggle)
 
-Drop at `data/eng_-french.csv` and run `python notebooks/01_prepare_enfr_data.py`.
+**[Language Translation (English-French)](https://www.kaggle.com/datasets/devicharith/language-translation-englishfrench)**  
+Author: Devicharith · License: CC0
+
+Tatoeba / [manythings.org Anki](http://www.manythings.org/anki/) EN–FR dump with those two column names.
+
+A 200-row peek is in [`eng_-french.sample.csv`](eng_-french.sample.csv).
+
+Get the full file (same 175621 rows):
+
+```bash
+python scripts/fetch_enfr_data.py
+```
+
+Writes `data/eng_-french.csv`.
 
 ## Vocab from the notebook run
 
@@ -17,10 +33,6 @@ Drop at `data/eng_-french.csv` and run `python notebooks/01_prepare_enfr_data.py
 | en | 14301 |
 | fr | 25726 |
 
-Decoder `Lang` (French): PAD=0, SOS=1, EOS=2, UNK=3.
-
-Encoder `inpLang` (English): starts with only PAD=0 and UNK=1 (`n_words = 2`). Different UNK id on purpose.
-
-Encoder ids = English tokens (missing → 1).
-Decoder ids = SOS + French tokens + EOS, pad to MAX_LENGTH=64.
-Batch size = 32.
+Decoder `Lang`: PAD=0, SOS=1, EOS=2, UNK=3  
+Encoder `inpLang`: PAD=0, UNK=1 at start  
+`MAX_LENGTH=64`, batch=32.
