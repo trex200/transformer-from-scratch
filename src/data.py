@@ -7,8 +7,6 @@ tensors with SOS / EOS / PAD / UNK.
 `unicodeToAscii` and `normalizeString` follow the PyTorch seq2seq
 translation tutorial:
 https://pytorch.org/tutorials/intermediate/seq2seq_translation_tutorial.html
-(the unicode→ASCII helper is the well-known NFD strip from
-https://stackoverflow.com/a/518232/2809427)
 """
 
 from __future__ import annotations
@@ -21,9 +19,10 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 
 PAD_token = 0
-UNK_token = 1
-SOS_token = 2
-EOS_token = 3
+SOS_token = 1
+EOS_token = 2
+UNK_token = 3
+INP_UNK_token = 1  # encoder-side UNK lives at id 1 (see inpLang)
 
 MAX_LENGTH = 64
 BATCH_SIZE = 32
@@ -35,26 +34,36 @@ FR_COL = "French words/sentences"
 
 
 class Lang:
-    """Word-level vocab. Reserved ids: PAD=0, UNK=1, SOS=2, EOS=3."""
+    """French / decoder vocab. Reserved: PAD=0, SOS=1, EOS=2, UNK=3."""
 
-    def __init__(self, name: str):
+    def __init__(self, name):
         self.name = name
-        self.word2index = {}
-        self.word2count = {}
-        self.index2word = {
-            PAD_token: "PAD",
-            UNK_token: "UNK",
-            SOS_token: "SOS",
-            EOS_token: "EOS",
+        self.word2index = {
+            "<pad>": PAD_token,
+            "<sos>": SOS_token,
+            "<eos>": EOS_token,
+            "<unk>": UNK_token,
         }
-        self.n_words = 4
+        self.word2count = {
+            "<pad>": 0,
+            "<sos>": 0,
+            "<eos>": 0,
+            "<unk>": 0,
+        }
+        self.index2word = {
+            PAD_token: "<pad>",
+            SOS_token: "<sos>",
+            EOS_token: "<eos>",
+            UNK_token: "<unk>",
+        }
+        self.n_words = 4  # PAD, SOS, EOS, UNK
 
-    def addSentence(self, sentence: str) -> None:
+    def addSentence(self, sentence):
         for word in sentence.split(" "):
-            if word:
+            if word.strip():
                 self.addWord(word)
 
-    def addWord(self, word: str) -> None:
+    def addWord(self, word):
         if word not in self.word2index:
             self.word2index[word] = self.n_words
             self.word2count[word] = 1
@@ -64,16 +73,41 @@ class Lang:
             self.word2count[word] += 1
 
 
-# Notebook used `inpLang` for English and `Lang` for French.
-inpLang = Lang
+class inpLang:
+    """English / encoder vocab. Only PAD=0 and UNK=1 at start (different UNK id)."""
+
+    def __init__(self, name):
+        self.name = name
+        self.word2index = {
+            "<pad>": PAD_token,
+            "<unk>": INP_UNK_token,
+        }
+        self.word2count = {
+            "<pad>": 0,
+            "<unk>": 0,
+        }
+        self.index2word = {
+            PAD_token: "<pad>",
+            INP_UNK_token: "<unk>",
+        }
+        self.n_words = 2  # only PAD and UNK initially
+
+    def addSentence(self, sentence):
+        for word in sentence.split(" "):
+            if word.strip():
+                self.addWord(word)
+
+    def addWord(self, word):
+        if word not in self.word2index:
+            self.word2index[word] = self.n_words
+            self.word2count[word] = 1
+            self.index2word[self.n_words] = word
+            self.n_words += 1
+        else:
+            self.word2count[word] += 1
 
 
 def unicodeToAscii(s: str) -> str:
-    """Turn a Unicode string to plain ASCII.
-
-    From the PyTorch seq2seq tutorial, via
-    https://stackoverflow.com/a/518232/2809427
-    """
     return "".join(
         c
         for c in unicodedata.normalize("NFD", s)
@@ -82,10 +116,6 @@ def unicodeToAscii(s: str) -> str:
 
 
 def normalizeString(s: str) -> str:
-    """Lowercase, trim, keep letters / apostrophes / .!? for tokenization.
-
-    From the PyTorch seq2seq translation tutorial (adapted).
-    """
     s = unicodeToAscii(s.lower().strip())
     s = re.sub(r"([.!?])", r" \1", s)
     s = re.sub(r"[^a-zA-Z' .!?]+", r" ", s)
@@ -93,8 +123,7 @@ def normalizeString(s: str) -> str:
     return s.strip()
 
 
-def indexesFromSentence(lang: Lang, sentence: str) -> List[int]:
-    """Decoder-side: SOS + tokens + EOS. Unknown words → UNK."""
+def indexesFromSentence(lang, sentence):
     return (
         [SOS_token]
         + [lang.word2index.get(word, UNK_token) for word in sentence.split(" ") if word.strip()]
@@ -102,33 +131,27 @@ def indexesFromSentence(lang: Lang, sentence: str) -> List[int]:
     )
 
 
-def indexesFromSentence_forenc(lang: Lang, sentence: str) -> List[int]:
-    """Encoder-side English: tokens only, safe UNK handling."""
+def indexesFromSentence_forenc(lang, sentence):
     return [
-        lang.word2index.get(word, UNK_token)
+        lang.word2index.get(word, INP_UNK_token)
         for word in sentence.split(" ")
         if word.strip()
     ]
 
 
-def tensorFromSentence(lang: Lang, sentence: str, device=DEVICE) -> torch.Tensor:
+def tensorFromSentence(lang, sentence, device=DEVICE):
     indexes = indexesFromSentence(lang, sentence)[:MAX_LENGTH]
     indexes += [PAD_token] * (MAX_LENGTH - len(indexes))
     return torch.tensor(indexes, dtype=torch.long, device=device)
 
 
-def tensorFromSentence_forenc(lang: Lang, sentence: str, device=DEVICE) -> torch.Tensor:
+def tensorFromSentence_forenc(lang, sentence, device=DEVICE):
     indexes = indexesFromSentence_forenc(lang, sentence)[:MAX_LENGTH]
     indexes += [PAD_token] * (MAX_LENGTH - len(indexes))
     return torch.tensor(indexes, dtype=torch.long, device=device)
 
 
-def tensorsFromPair(
-    pair: List[str],
-    input_lang: Lang,
-    output_lang: Lang,
-    device=DEVICE,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+def tensorsFromPair(pair, input_lang, output_lang, device=DEVICE):
     return (
         tensorFromSentence_forenc(input_lang, pair[0], device=device),
         tensorFromSentence(output_lang, pair[1], device=device),
@@ -136,27 +159,24 @@ def tensorsFromPair(
 
 
 class FrenchEnData(Dataset):
-    """Pairs → (encoder_ids [MAX_LENGTH], decoder_ids [MAX_LENGTH])."""
-
-    def __init__(self, pairs: List[List[str]], input_lang: Lang, output_lang: Lang):
+    def __init__(self, pairs, input_lang, output_lang):
         self.pairs = pairs
         self.input_lang = input_lang
         self.output_lang = output_lang
 
-    def __len__(self) -> int:
+    def __len__(self):
         return len(self.pairs)
 
-    def __getitem__(self, idx: int):
+    def __getitem__(self, idx):
         return tensorsFromPair(self.pairs[idx], self.input_lang, self.output_lang)
 
 
-def build_pairs_and_vocabs(df, en_col: str = EN_COL, fr_col: str = FR_COL):
-    """Walk the CSV rows, normalize, build vocabs. Same loop as the notebook."""
+def build_pairs_and_vocabs(df, en_col=EN_COL, fr_col=FR_COL):
     input_lang = inpLang("en")
     output_lang = Lang("fr")
-    pairs: List[List[str]] = []
-    input_sen: List[str] = []
-    output_sen: List[str] = []
+    pairs = []
+    input_sen = []
+    output_sen = []
 
     for _, row in df.iterrows():
         en_sentence = normalizeString(str(row[en_col]))
@@ -171,6 +191,6 @@ def build_pairs_and_vocabs(df, en_col: str = EN_COL, fr_col: str = FR_COL):
     return pairs, input_lang, output_lang, input_sen, output_sen
 
 
-def make_dataloader(pairs, input_lang, output_lang, batch_size: int = BATCH_SIZE):
+def make_dataloader(pairs, input_lang, output_lang, batch_size=BATCH_SIZE):
     dataset = FrenchEnData(pairs, input_lang, output_lang)
     return DataLoader(dataset, batch_size=batch_size, shuffle=True)
